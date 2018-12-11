@@ -111,6 +111,47 @@ class UnitVarianceMLPG(Function):
     """
 
     @staticmethod
+    def symbolic(g, means, R):
+        from torch.onnx import symbolic as Op
+        const_0_ = g.op("Constant", value_t=torch.tensor([0]))
+        const_1_ = g.op("Constant", value_t=torch.tensor([1]))
+        const_2_ = g.op("Constant", value_t=torch.tensor([2]))
+        const_neg_1_ = g.op("Constant", value_t=torch.tensor([-1]))
+
+        num_windows = g.op('Constant', value_t=torch.LongTensor([
+            R.type().sizes()[-1] // R.type().sizes()[0]]))  # maybe not modified, so fixed
+        T = g.op('Gather', g.op('Shape', R), const_0_)  # R.shape[0]
+        dim = len(means.type().sizes())
+        dims = g.op('Shape', means)  # means.shape => (1, -1, 57)
+
+        # PyTorch is not support to export If statement...
+        if dim == 2:
+            T_ = g.op('Gather', dims, const_0_)
+            D = g.op('Gather', dims, const_1_)
+            B = const_1_
+            means = Op.view(g, means, g.op('Concat', const_1_, T_, D, axis_i=0))
+        else:
+            B = g.op('Gather', dims, const_0_)
+            T_ = g.op('Gather', dims, const_1_)
+            D = g.op('Gather', dims, const_2_)
+
+        reshaped = not (R.type().sizes()[0] == means.type().sizes()[1])
+        if not reshaped:
+            static_dim = g.op('Div', D, num_windows)
+            _r = Op.view(g, means, g.op('Concat', B, T, num_windows, const_neg_1_, axis_i=0))
+            _t = g.op("Transpose", _r, perm_i=(2, 1))
+            reshaped_means = Op.view(g, _t, g.op('Concat', B, const_neg_1_, static_dim, axis_i=0))
+        else:
+            static_dim = D
+            reshaped_means = means
+
+        out = g.op("MatMul", R, reshaped_means)
+        if dim == 2:
+            return Op.view(g, out, g.op('Concat', const_neg_1_, static_dim, axis_i=0))
+
+        return out
+
+    @staticmethod
     def forward(ctx, means, R):
         # TODO: remove this
         ctx.save_for_backward(means, R)
